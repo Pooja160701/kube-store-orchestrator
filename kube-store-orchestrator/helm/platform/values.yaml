@@ -12,7 +12,7 @@ service:
 ingress:
   enabled: true
   className: traefik
-  host: dashboard.localhost
+  host: localhost
   path: /
 
 resources:
