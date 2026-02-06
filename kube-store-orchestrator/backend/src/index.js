@@ -6,7 +6,11 @@ const app = express();
 app.use(express.json());
 
 const kc = new k8s.KubeConfig();
-kc.loadFromDefault();
+if (process.env.KUBERNETES_SERVICE_HOST) {
+  kc.loadFromCluster();
+} else {
+  kc.loadFromDefault();
+}
 
 const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 
