@@ -1,3 +1,4 @@
+const appsApi = kc.makeApiClient(k8s.AppsV1Api);
 const express = require("express");
 const { v4: uuidv4 } = require("uuid");
 const k8s = require("@kubernetes/client-node");
@@ -27,6 +28,89 @@ app.get("/stores", (req, res) => {
 app.post("/stores", async (req, res) => {
   const storeId = uuidv4().slice(0, 8);
   const namespace = `store-${storeId}`;
+
+  //1. Create DB secret
+  await k8sApi.createNamespacedSecret(namespace, {
+    metadata: { name: "mysql-secret" },
+    stringData: {
+      MYSQL_ROOT_PASSWORD: "rootpass",
+      MYSQL_DATABASE: "wordpress",
+      MYSQL_USER: "wpuser",
+      MYSQL_PASSWORD: "wppass"
+    }
+  });
+
+  // 1. Create DB secret
+  await k8sApi.createNamespacedSecret(namespace, {
+    metadata: { name: "mysql-secret" },
+    stringData: {
+      MYSQL_ROOT_PASSWORD: "rootpass",
+      MYSQL_DATABASE: "wordpress",
+      MYSQL_USER: "wpuser",
+      MYSQL_PASSWORD: "wppass"
+    }
+  });
+
+  // 2. Create PVC for MySQL
+  await k8sApi.createNamespacedPersistentVolumeClaim(namespace, {
+    metadata: { name: "mysql-pvc" },
+    spec: {
+      accessModes: ["ReadWriteOnce"],
+      resources: {
+        requests: {
+          storage: "1Gi"
+        }
+      }
+    }
+  });
+
+  // 3. Create MySQL StatefulSet
+  await appsApi.createNamespacedStatefulSet(namespace, {
+    metadata: { name: "mysql" },
+    spec: {
+      serviceName: "mysql",
+      replicas: 1,
+      selector: {
+        matchLabels: { app: "mysql" }
+      },
+      template: {
+        metadata: { labels: { app: "mysql" } },
+        spec: {
+          containers: [
+            {
+              name: "mysql",
+              image: "mysql:8",
+              envFrom: [
+                {
+                  secretRef: { name: "mysql-secret" }
+                }
+              ],
+              ports: [{ containerPort: 3306 }],
+              volumeMounts: [
+                {
+                  name: "mysql-storage",
+                  mountPath: "/var/lib/mysql"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      volumeClaimTemplates: [
+        {
+          metadata: { name: "mysql-storage" },
+          spec: {
+            accessModes: ["ReadWriteOnce"],
+            resources: {
+              requests: {
+                storage: "1Gi"
+              }
+            }
+          }
+        }
+      ]
+    }
+  });
 
   try {
     await k8sApi.createNamespace({
