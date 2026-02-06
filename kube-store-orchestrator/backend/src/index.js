@@ -1,4 +1,3 @@
-const appsApi = kc.makeApiClient(k8s.AppsV1Api);
 const express = require("express");
 const { v4: uuidv4 } = require("uuid");
 const k8s = require("@kubernetes/client-node");
@@ -14,6 +13,7 @@ if (process.env.KUBERNETES_SERVICE_HOST) {
 }
 
 const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
+const appsApi = kc.makeApiClient(k8s.AppsV1Api);
 
 const stores = new Map();
 
