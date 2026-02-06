@@ -8,4 +8,4 @@ spec:
     app: backend
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: 80
+      targetPort: 3000
