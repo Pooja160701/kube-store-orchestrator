@@ -13,12 +13,33 @@ spec:
         app: backend
     spec:
       serviceAccountName: {{ .Release.Name }}-sa
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+
       containers:
         - name: backend
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+
           ports:
             - containerPort: 3000
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu }}
@@ -26,15 +47,3 @@ spec:
             limits:
               cpu: {{ .Values.resources.limits.cpu }}
               memory: {{ .Values.resources.limits.memory }}
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 3000
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 3000
-            initialDelaySeconds: 10
-            periodSeconds: 20

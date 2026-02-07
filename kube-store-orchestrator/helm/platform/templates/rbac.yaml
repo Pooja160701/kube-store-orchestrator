@@ -6,27 +6,40 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ .Release.Name }}-role
+  name: platform-role
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "services", "secrets", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    resources:
+      - namespaces
+      - services
+      - secrets
+      - persistentvolumeclaims
+      - resourcequotas
+      - limitranges
+      - pods
+    verbs: ["create", "get", "list", "delete", "watch"]
+
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    resources:
+      - deployments
+      - statefulsets
+      - replicasets
+    verbs: ["create", "get", "list", "delete", "watch"]
+
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    resources:
+      - ingresses
+    verbs: ["create", "get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Release.Name }}-binding
+  name: platform-rolebinding
 subjects:
   - kind: ServiceAccount
-    name: {{ .Release.Name }}-sa
-    namespace: {{ .Release.Namespace }}
+    name: platform-sa
+    namespace: platform
 roleRef:
   kind: ClusterRole
-  name: {{ .Release.Name }}-role
+  name: platform-role
   apiGroup: rbac.authorization.k8s.io

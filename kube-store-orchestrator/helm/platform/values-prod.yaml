@@ -1,0 +1,7 @@
+ingress:
+  host: urumi.yourdomain.com
+
+storageClass: longhorn
+
+tls:
+  enabled: true
