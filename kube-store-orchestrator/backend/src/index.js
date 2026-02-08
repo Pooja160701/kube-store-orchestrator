@@ -55,8 +55,8 @@ async function waitForStoreReady(namespace, storeId) {
       const wp = await appsApi.readNamespacedDeployment("wordpress", namespace);
       const mysql = await appsApi.readNamespacedStatefulSet("mysql", namespace);
 
-      const wpReady = wp.body.status?.readyReplicas === 1;
-      const mysqlReady = mysql.body.status?.readyReplicas === 1;
+      const wpReady = wp.body.status?.availableReplicas >= 1;
+      const mysqlReady = mysql.body.status?.readyReplicas >= 1;
 
       if (wpReady && mysqlReady) {
         const store = stores.get(storeId);
@@ -239,10 +239,17 @@ app.post("/stores", storeLimiter, async (req, res) => {
 
     stores.set(storeId, store);
     totalCreated++;
+    totalFailed++;
 
     activityLog.push({
       action: "CREATE",
       namespace,
+      timestamp: new Date().toISOString()
+    });
+
+    activityLog.push({
+      action: "DELETE",
+      namespace: store.namespace,
       timestamp: new Date().toISOString()
     });
 
