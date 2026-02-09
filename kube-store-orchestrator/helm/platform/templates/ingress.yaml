@@ -6,14 +6,21 @@ metadata:
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
-    - host: {{ .Values.ingress.host }}
+    - host: localhost
       http:
         paths:
-          - path: {{ .Values.ingress.path }}
+          - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ .Release.Name }}-service
+                name: dashboard-service
                 port:
-                  number: {{ .Values.service.port }}
+                  number: 80
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: platform-service
+                port:
+                  number: 80
 {{- end }}

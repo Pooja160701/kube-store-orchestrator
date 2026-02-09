@@ -5,6 +5,7 @@ const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
 
 const app = express();
+app.set("trust proxy", 1); 
 app.use(express.json());
 
 /* -----------------------------
@@ -63,7 +64,7 @@ async function waitForStoreReady(namespace, storeId) {
         if (store) store.status = "Ready";
         return;
       }
-    } catch (err) {}
+    } catch {}
 
     await new Promise(r => setTimeout(r, 2000));
   }
@@ -81,7 +82,7 @@ async function waitForStoreReady(namespace, storeId) {
 ----------------------------- */
 
 app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok" });
+  res.json({ status: "ok" });
 });
 
 /* -----------------------------
@@ -126,10 +127,52 @@ app.post("/stores", storeLimiter, async (req, res) => {
 
   const storeId = uuidv4().slice(0, 8);
   const namespace = `store-${storeId}`;
+  const engine = req.body.engine || "woocommerce";
   const dbPassword = generatePassword();
 
   try {
     await coreApi.createNamespace({ metadata: { name: namespace } });
+
+    await coreApi.createNamespacedResourceQuota(namespace, {
+      metadata: { name: "store-quota" },
+      spec: {
+        hard: {
+          "requests.cpu": "500m",
+          "requests.memory": "512Mi",
+          "limits.cpu": "1",
+          "limits.memory": "1Gi",
+          "persistentvolumeclaims": "2"
+        }
+      }
+    });
+
+    await coreApi.createNamespacedLimitRange(namespace, {
+      metadata: { name: "store-limits" },
+      spec: {
+        limits: [{
+          type: "Container",
+          default: { cpu: "500m", memory: "512Mi" },
+          defaultRequest: { cpu: "100m", memory: "128Mi" }
+        }]
+      }
+    });
+
+    await networkingApi.createNamespacedNetworkPolicy(namespace, {
+      metadata: { name: "default-deny" },
+      spec: { podSelector: {}, policyTypes: ["Ingress", "Egress"] }
+    });
+
+    await networkingApi.createNamespacedNetworkPolicy(namespace, {
+      metadata: { name: "allow-wp-to-mysql" },
+      spec: {
+        podSelector: { matchLabels: { app: "mysql" }},
+        ingress: [{
+          from: [{
+            podSelector: { matchLabels: { app: "wordpress" } }
+          }]
+        }]
+      }
+    });
 
     await coreApi.createNamespacedSecret(namespace, {
       metadata: { name: "mysql-secret" },
@@ -150,106 +193,28 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
-    await appsApi.createNamespacedStatefulSet(namespace, {
-      metadata: { name: "mysql" },
-      spec: {
-        serviceName: "mysql",
-        replicas: 1,
-        selector: { matchLabels: { app: "mysql" } },
-        template: {
-          metadata: { labels: { app: "mysql" } },
-          spec: {
-            containers: [{
-              name: "mysql",
-              image: "mysql:8",
-              envFrom: [{ secretRef: { name: "mysql-secret" } }],
-              ports: [{ containerPort: 3306 }]
-            }]
-          }
-        },
-        volumeClaimTemplates: [{
-          metadata: { name: "mysql-storage" },
-          spec: {
-            accessModes: ["ReadWriteOnce"],
-            resources: { requests: { storage: "1Gi" } }
-          }
-        }]
-      }
-    });
-
-    await coreApi.createNamespacedService(namespace, {
-      metadata: { name: "wordpress" },
-      spec: {
-        selector: { app: "wordpress" },
-        ports: [{ port: 80 }]
-      }
-    });
-
-    await appsApi.createNamespacedDeployment(namespace, {
-      metadata: { name: "wordpress" },
-      spec: {
-        replicas: 1,
-        selector: { matchLabels: { app: "wordpress" } },
-        template: {
-          metadata: { labels: { app: "wordpress" } },
-          spec: {
-            containers: [{
-              name: "wordpress",
-              image: "wordpress:php8.2-apache",
-              env: [
-                { name: "WORDPRESS_DB_HOST", value: "mysql" },
-                { name: "WORDPRESS_DB_USER", value: "wpuser" },
-                { name: "WORDPRESS_DB_PASSWORD", value: dbPassword },
-                { name: "WORDPRESS_DB_NAME", value: "wordpress" }
-              ],
-              ports: [{ containerPort: 80 }]
-            }]
-          }
-        }
-      }
-    });
-
-    await networkingApi.createNamespacedIngress(namespace, {
-      metadata: { name: "wordpress-ingress" },
-      spec: {
-        ingressClassName: "traefik",
-        rules: [{
-          host: `${namespace}.localhost`,
-          http: {
-            paths: [{
-              path: "/",
-              pathType: "Prefix",
-              backend: {
-                service: { name: "wordpress", port: { number: 80 } }
-              }
-            }]
-          }
-        }]
-      }
-    });
+    if (engine === "woocommerce") {
+      await provisionWooCommerce(namespace, dbPassword);
+    } else {
+      return res.status(400).json({ error: "Unsupported engine in Round 1" });
+    }
 
     const store = {
       id: storeId,
       namespace,
+      engine,
       status: "Provisioning",
       failureReason: null,
-      url: `http://${namespace}.localhost:8080`,
+      url: `http://${namespace}.localhost`,
       createdAt: new Date().toISOString()
     };
 
     stores.set(storeId, store);
     totalCreated++;
-    totalFailed++;
 
     activityLog.push({
       action: "CREATE",
       namespace,
-      timestamp: new Date().toISOString()
-    });
-
-    activityLog.push({
-      action: "DELETE",
-      namespace: store.namespace,
       timestamp: new Date().toISOString()
     });
 
@@ -291,23 +256,110 @@ app.delete("/stores/:id", async (req, res) => {
 });
 
 /* -----------------------------
+   WooCommerce Provisioner
+----------------------------- */
+
+async function provisionWooCommerce(namespace, dbPassword) {
+  await appsApi.createNamespacedStatefulSet(namespace, {
+    metadata: { name: "mysql" },
+    spec: {
+      serviceName: "mysql",
+      replicas: 1,
+      selector: { matchLabels: { app: "mysql" } },
+      template: {
+        metadata: { labels: { app: "mysql" } },
+        spec: {
+          containers: [{
+            name: "mysql",
+            image: "mysql:8",
+            envFrom: [{ secretRef: { name: "mysql-secret" } }],
+            ports: [{ containerPort: 3306 }]
+          }]
+        }
+      },
+      volumeClaimTemplates: [{
+        metadata: { name: "mysql-storage" },
+        spec: {
+          accessModes: ["ReadWriteOnce"],
+          resources: { requests: { storage: "1Gi" } }
+        }
+      }]
+    }
+  });
+
+    await coreApi.createNamespacedService(namespace, {
+      metadata: { name: "wordpress" },
+      spec: {
+        selector: { app: "wordpress" },
+        ports: [{ port: 80 }]
+      }
+    });
+
+  await appsApi.createNamespacedDeployment(namespace, {
+    metadata: { name: "wordpress" },
+    spec: {
+      replicas: 1,
+      selector: { matchLabels: { app: "wordpress" } },
+      template: {
+        metadata: { labels: { app: "wordpress" } },
+        spec: {
+          containers: [{
+            name: "wordpress",
+            image: "wordpress:php8.2-apache",
+            env: [
+              { name: "WORDPRESS_DB_HOST", value: "mysql" },
+              { name: "WORDPRESS_DB_USER", value: "wpuser" },
+              { name: "WORDPRESS_DB_PASSWORD", value: dbPassword },
+              { name: "WORDPRESS_DB_NAME", value: "wordpress" }
+            ],
+            ports: [{ containerPort: 80 }]
+          }]
+        }
+      }
+    }
+  });
+
+    await networkingApi.createNamespacedIngress(namespace, {
+      metadata: { name: "wordpress-ingress" },
+      spec: {
+        ingressClassName: "traefik",
+        rules: [{
+          host: `${namespace}.localhost`,
+          http: {
+            paths: [{
+              path: "/",
+              pathType: "Prefix",
+              backend: {
+                service: { name: "wordpress", port: { number: 80 } }
+              }
+            }]
+          }
+        }]
+      }
+    });
+}
+
+/* -----------------------------
    Reconciliation
 ----------------------------- */
 
 async function reconcileStoresOnStartup() {
   const nsList = await coreApi.listNamespace();
+
   const storeNamespaces = nsList.body.items
     .map(ns => ns.metadata.name)
     .filter(name => name.startsWith("store-"));
 
   for (const namespace of storeNamespaces) {
     const id = namespace.replace("store-", "");
+
     stores.set(id, {
       id,
       namespace,
+      engine: "woocommerce",
       status: "Provisioning",
       failureReason: null,
-      url: `http://${namespace}.localhost:8080`,
+      url: `http://${namespace}.localhost`,
       createdAt: new Date().toISOString()
     });
   }
