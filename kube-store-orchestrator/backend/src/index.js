@@ -16,6 +16,8 @@ const stores = new Map();
 let totalCreated = 0;
 let totalFailed = 0;
 let activityLog = [];
+let provisioningInProgress = 0;
+const MAX_CONCURRENT_PROVISIONING = 3;
 
 const MAX_STORES = 20;
 
@@ -51,6 +53,9 @@ function generatePassword() {
 }
 
 async function waitForStoreReady(namespace, storeId) {
+  let lastWpReady = false;
+  let lastMysqlReady = false;
+
   for (let i = 0; i < 30; i++) {
     try {
       const wp = await appsApi.readNamespacedDeployment("wordpress", namespace);
@@ -59,20 +64,35 @@ async function waitForStoreReady(namespace, storeId) {
       const wpReady = wp.body.status?.availableReplicas >= 1;
       const mysqlReady = mysql.body.status?.readyReplicas >= 1;
 
+      lastWpReady = wpReady;
+      lastMysqlReady = mysqlReady;
+
       if (wpReady && mysqlReady) {
         const store = stores.get(storeId);
-        if (store) store.status = "Ready";
+        if (store) {
+          store.status = "Ready";
+          store.failureReason = null;
+        }
         return;
       }
-    } catch {}
+    } catch (err) {
+      // optional: log err if needed
+    }
 
     await new Promise(r => setTimeout(r, 2000));
   }
 
+  // Timeout reached
   const store = stores.get(storeId);
   if (store) {
     store.status = "Failed";
-    store.failureReason = "Timeout waiting for readiness";
+
+    if (!lastWpReady || !lastMysqlReady) {
+      store.failureReason = "Pods not becoming ready in time";
+    } else {
+      store.failureReason = "Unknown readiness failure";
+    }
+
     totalFailed++;
   }
 }
@@ -125,14 +145,41 @@ app.post("/stores", storeLimiter, async (req, res) => {
     return res.status(400).json({ error: "Store limit reached" });
   }
 
+  if (provisioningInProgress >= MAX_CONCURRENT_PROVISIONING) {
+    return res.status(429).json({
+      error: "Provisioning limit reached. Try later."
+    });
+  }
+
+  provisioningInProgress++;
+
   const storeId = uuidv4().slice(0, 8);
   const namespace = `store-${storeId}`;
   const engine = req.body.engine || "woocommerce";
   const dbPassword = generatePassword();
 
   try {
-    await coreApi.createNamespace({ metadata: { name: namespace } });
+    // Check if namespace already exists
+    try {
+      await coreApi.readNamespace(namespace);
+      return res.status(409).json({
+        error: "Store already exists",
+        namespace
+      });
+    } catch {
+      // Namespace does not exist, create it
+      await coreApi.createNamespace({
+        metadata: {
+          name: namespace,
+          labels: {
+            "managed-by": "store-platform",
+            "store-id": storeId
+          }
+        }
+      });
+    }
 
+    // Resource Quota
     await coreApi.createNamespacedResourceQuota(namespace, {
       metadata: { name: "store-quota" },
       spec: {
@@ -146,6 +193,7 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
+    // Limit Range
     await coreApi.createNamespacedLimitRange(namespace, {
       metadata: { name: "store-limits" },
       spec: {
@@ -157,9 +205,13 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
+    // Network Policies
     await networkingApi.createNamespacedNetworkPolicy(namespace, {
       metadata: { name: "default-deny" },
-      spec: { podSelector: {}, policyTypes: ["Ingress", "Egress"] }
+      spec: {
+        podSelector: {},
+        policyTypes: ["Ingress", "Egress"]
+      }
     });
 
     await networkingApi.createNamespacedNetworkPolicy(namespace, {
@@ -168,12 +220,13 @@ app.post("/stores", storeLimiter, async (req, res) => {
         podSelector: { matchLabels: { app: "mysql" }},
         ingress: [{
           from: [{
-            podSelector: { matchLabels: { app: "wordpress" } }
+            podSelector: { matchLabels: { app: "wordpress" }}
           }]
         }]
       }
     });
 
+    // MySQL Secret
     await coreApi.createNamespacedSecret(namespace, {
       metadata: { name: "mysql-secret" },
       stringData: {
@@ -184,6 +237,7 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
+    // MySQL Headless Service
     await coreApi.createNamespacedService(namespace, {
       metadata: { name: "mysql" },
       spec: {
@@ -193,6 +247,7 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
+    // Engine Provisioning
     if (engine === "woocommerce") {
       await provisionWooCommerce(namespace, dbPassword);
     } else {
@@ -220,11 +275,14 @@ app.post("/stores", storeLimiter, async (req, res) => {
 
     waitForStoreReady(namespace, storeId);
 
-    res.status(201).json(store);
+    return res.status(201).json(store);
 
   } catch (err) {
     totalFailed++;
-    res.status(500).json({ error: "Provisioning failed" });
+    provisioningInProgress--;
+    return res.status(500).json({ error: "Provisioning failed" });
+  } finally {
+    provisioningInProgress--;
   }
 });
 
@@ -240,6 +298,7 @@ app.delete("/stores/:id", async (req, res) => {
 
   try {
     store.status = "Deleting";
+
     await coreApi.deleteNamespace(store.namespace);
 
     activityLog.push({
@@ -249,8 +308,15 @@ app.delete("/stores/:id", async (req, res) => {
     });
 
     stores.delete(id);
-    res.json({ message: "Store deleted" });
-  } catch {
+
+    res.json({ message: "Store deletion initiated" });
+
+  } catch (err) {
+    if (err.body?.reason === "NotFound") {
+      stores.delete(id);
+      return res.json({ message: "Already deleted" });
+    }
+
     res.status(500).json({ error: "Delete failed" });
   }
 });
@@ -344,27 +410,48 @@ async function provisionWooCommerce(namespace, dbPassword) {
 ----------------------------- */
 
 async function reconcileStoresOnStartup() {
-  const nsList = await coreApi.listNamespace();
+  try {
+    const nsList = await coreApi.listNamespace();
 
-  const storeNamespaces = nsList.body.items
-    .map(ns => ns.metadata.name)
-    .filter(name => name.startsWith("store-"));
+    const storeNamespaces = nsList.body.items
+      .filter(ns => ns.metadata.labels?.["managed-by"] === "store-platform")
+      .map(ns => ns.metadata.name);
 
-  for (const namespace of storeNamespaces) {
-    const id = namespace.replace("store-", "");
+    for (const namespace of storeNamespaces) {
+      const id = namespace.replace("store-", "");
 
-    stores.set(id, {
-      id,
-      namespace,
-      engine: "woocommerce",
-      status: "Provisioning",
-      failureReason: null,
-      url: `http://${namespace}.localhost`,
-      createdAt: new Date().toISOString()
-    });
+      let status = "Provisioning";
+      let failureReason = null;
+
+      try {
+        const wp = await appsApi.readNamespacedDeployment("wordpress", namespace);
+        const mysql = await appsApi.readNamespacedStatefulSet("mysql", namespace);
+
+        const wpReady = wp.body.status?.availableReplicas >= 1;
+        const mysqlReady = mysql.body.status?.readyReplicas >= 1;
+
+        if (wpReady && mysqlReady) {
+          status = "Ready";
+        }
+      } catch (err) {
+        status = "Failed";
+        failureReason = "Missing or unhealthy resources";
+      }
+
+      stores.set(id, {
+        id,
+        namespace,
+        status,
+        failureReason,
+        url: `http://${namespace}.localhost`,
+        createdAt: new Date().toISOString()
+      });
+    }
+
+    console.log(`Reconciled ${stores.size} stores.`);
+  } catch (err) {
+    console.error("Reconciliation failed:", err);
   }
-
-  console.log(`Reconciled ${stores.size} stores.`);
 }
 
 /* -----------------------------

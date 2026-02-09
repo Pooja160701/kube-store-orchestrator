@@ -1,7 +1,20 @@
+image:
+  repository: your-dockerhub-username/store-platform-backend
+  tag: "1.0.0"
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 80
+
 ingress:
+  enabled: true
+  className: traefik
   host: urumi.yourdomain.com
+  tls:
+    enabled: true
+    secretName: platform-tls
 
 storageClass: longhorn
 
-tls:
-  enabled: true
+replicaCount: 3

@@ -6,7 +6,7 @@ metadata:
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
-    - host: localhost
+    - host: {{ .Values.ingress.host }}
       http:
         paths:
           - path: /
@@ -16,11 +16,19 @@ spec:
                 name: dashboard-service
                 port:
                   number: 80
+
           - path: /api
             pathType: Prefix
             backend:
               service:
-                name: platform-service
+                name: {{ .Release.Name }}-service
                 port:
                   number: 80
+
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
 {{- end }}
