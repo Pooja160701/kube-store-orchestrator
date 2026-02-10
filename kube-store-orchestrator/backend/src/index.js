@@ -159,7 +159,8 @@ app.post("/stores", storeLimiter, async (req, res) => {
   const dbPassword = generatePassword();
 
   try {
-    // Check if namespace already exists
+
+    // Namespace check
     try {
       await coreApi.readNamespace(namespace);
       return res.status(409).json({
@@ -167,7 +168,6 @@ app.post("/stores", storeLimiter, async (req, res) => {
         namespace
       });
     } catch {
-      // Namespace does not exist, create it
       await coreApi.createNamespace({
         metadata: {
           name: namespace,
@@ -179,7 +179,7 @@ app.post("/stores", storeLimiter, async (req, res) => {
       });
     }
 
-    // Resource Quota
+    // Resource controls
     await coreApi.createNamespacedResourceQuota(namespace, {
       metadata: { name: "store-quota" },
       spec: {
@@ -193,7 +193,6 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
-    // Limit Range
     await coreApi.createNamespacedLimitRange(namespace, {
       metadata: { name: "store-limits" },
       spec: {
@@ -205,7 +204,6 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
-    // Network Policies
     await networkingApi.createNamespacedNetworkPolicy(namespace, {
       metadata: { name: "default-deny" },
       spec: {
@@ -226,7 +224,6 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
-    // MySQL Secret
     await coreApi.createNamespacedSecret(namespace, {
       metadata: { name: "mysql-secret" },
       stringData: {
@@ -237,7 +234,6 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
-    // MySQL Headless Service
     await coreApi.createNamespacedService(namespace, {
       metadata: { name: "mysql" },
       spec: {
@@ -247,11 +243,11 @@ app.post("/stores", storeLimiter, async (req, res) => {
       }
     });
 
-    // Engine Provisioning
+    // Engine
     if (engine === "woocommerce") {
       await provisionWooCommerce(namespace, dbPassword);
     } else {
-      return res.status(400).json({ error: "Unsupported engine in Round 1" });
+      return res.status(400).json({ error: "Unsupported engine" });
     }
 
     const store = {
@@ -279,10 +275,11 @@ app.post("/stores", storeLimiter, async (req, res) => {
 
   } catch (err) {
     totalFailed++;
-    provisioningInProgress--;
+    console.error("Provisioning failed:", err.body || err);
     return res.status(500).json({ error: "Provisioning failed" });
+
   } finally {
-    provisioningInProgress--;
+    provisioningInProgress = Math.max(0, provisioningInProgress - 1);
   }
 });
 
