@@ -188,6 +188,19 @@ Medusa path stubbed and can be extended without architecture change.
 
 These can be extended in production.
 
+## One-Command Local Setup
+
+```bash
+./scripts/local_setup.sh
+```
+
+This script:
+- Creates k3d cluster
+- Installs Helm chart
+- Builds backend image
+- Imports image
+- Restarts deployment
+
 ---
 # Architecture Diagram
 
