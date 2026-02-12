@@ -189,20 +189,6 @@ Medusa path stubbed and can be extended without architecture change.
 These can be extended in production.
 
 ---
-
-Perfect 🔥
-You absolutely should include a **Mermaid architecture diagram** in your README.
-
-This gives:
-
-* Visual clarity
-* Strong system design signal
-* Reviewer confidence
-* Easier demo explanation
-
-Below is a **clean, internship-ready Mermaid diagram** you can paste directly inside `README.md`.
-
----
 # Architecture Diagram
 
 ```mermaid
