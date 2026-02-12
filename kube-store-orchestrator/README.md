@@ -240,7 +240,7 @@ flowchart LR
     StoreNamespace --- NetPol
 ```
 
-## 🔍 Architecture Explanation
+## Architecture Explanation
 
 * The **React Dashboard** interacts with the backend API.
 
@@ -268,18 +268,7 @@ flowchart LR
 * Deleting a store deletes the namespace → guarantees cleanup.
 
 ---
-Yes ✅ — this diagram is **correct and strong**.
-
-It clearly shows:
-
-* Control plane (Dashboard + Backend)
-* RBAC boundary
-* Namespace isolation
-* Store resources grouping
-* PVC + Secret separation
-* Ingress exposure model
----
-## 🔄 Store Provisioning Flow
+## Store Provisioning Flow
 
 ```mermaid
 sequenceDiagram
