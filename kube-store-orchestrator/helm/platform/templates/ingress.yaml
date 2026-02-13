@@ -25,7 +25,7 @@ spec:
                 port:
                   number: 80
 
-  {{- if .Values.ingress.tls.enabled }}
+  {{- if and .Values.ingress.tls .Values.ingress.tls.enabled }}
   tls:
     - hosts:
         - {{ .Values.ingress.host }}

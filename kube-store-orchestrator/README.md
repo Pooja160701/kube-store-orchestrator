@@ -317,3 +317,6 @@ sequenceDiagram
     Backend->>Kubernetes: Delete Namespace
     Kubernetes-->>Backend: Namespace terminated
 ```
+
+# Dashboard
+![alt text](image.png)

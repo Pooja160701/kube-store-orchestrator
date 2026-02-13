@@ -11,6 +11,9 @@ ingress:
   enabled: true
   className: traefik
   host: localhost
+  tls:
+    enabled: false
+    secretName: ""
 
 storageClass: local-path
 
